@@ -307,10 +307,6 @@ write_config() {
       {
         "protocol": ["bittorrent"],
         "outbound": "block"
-      },
-      {
-        "geoip": ["cn"],
-        "outbound": "block"
       }
     ],
     "final": "direct"
