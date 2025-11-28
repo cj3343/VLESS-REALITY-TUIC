@@ -35,7 +35,7 @@ install -m 755 sing-box*/sing-box /usr/local/bin/sing-box
 rm -rf sing-box* sb.tar.gz
 
 ###################################
-#   2. 域名池测速
+#   2. 域名池测速（使用你的 Gist）
 ###################################
 DOMAIN_LIST_URL="https://gist.githubusercontent.com/cj3343/8d38d603440ea50105319d7c09909faf/raw/47e05fcfdece890d1480f462afadc0baffcbb120/domain-list.txt"
 
@@ -65,19 +65,26 @@ done
 log "🔥 首轮测速最低延迟：$BEST_DOMAIN (${BEST_RTT} ms)"
 
 ###################################
-#  用户选择：重新测速 / 手动输入
+#  用户选择：重新测速 / 手动输入 / 直接用
 ###################################
 while true; do
     echo
-    read -rp "输入域名使用 [回车=自动选择]，输入 R 重新测速，输入 M 手动输入域名: " CHOICE
+    read -rp "Reality 域名选择 [回车=自动 ${BEST_DOMAIN}, R=重新测速, M=手动输入]: " CHOICE
     case "$CHOICE" in
-        "") REALITY_DOMAIN="$BEST_DOMAIN"; break ;;
+        "")
+            REALITY_DOMAIN="$BEST_DOMAIN"
+            break
+            ;;
         "R"|"r")
+            log "重新执行脚本进行测速..."
             exec bash "$0"
-            exit ;;
+            exit 0
+            ;;
         "M"|"m")
             read -rp "请输入自定义 Reality 伪装域名（必须能 443 直连）: " REALITY_DOMAIN
-            break ;;
+            [ -z "$REALITY_DOMAIN" ] && err "域名不能为空" && exit 1
+            break
+            ;;
         *)
             echo "无效选项，请重新输入。"
             ;;
@@ -95,8 +102,8 @@ VPORT=${VPORT:-443}
 read -rp "TUIC 端口 [默认 8443]: " TPORT
 TPORT=${TPORT:-8443}
 
-log "使用 VLESS 端口: $VPORT"
-log "使用 TUIC  端口: $TPORT"
+log "✅ VLESS 端口: $VPORT"
+log "✅ TUIC  端口: $TPORT"
 
 ###################################
 #   4. 生成 UUID + Reality 密钥
@@ -111,29 +118,35 @@ PRIV=$(grep PrivateKey /etc/sing-box/reality.txt | awk '{print $2}')
 PUB=$(grep PublicKey /etc/sing-box/reality.txt | awk '{print $2}')
 SID=$(openssl rand -hex 8)
 
-log "Reality PublicKey: $PUB"
-log "Reality ShortID:   $SID"
+log "Reality PrivateKey: $PRIV"
+log "Reality PublicKey : $PUB"
+log "Reality ShortID   : $SID"
 
 ###################################
-# 备份旧配置
+# 5. 备份旧配置并写入新 config.json
 ###################################
 if [ -f /etc/sing-box/config.json ]; then
-  cp /etc/sing-box/config.json "/etc/sing-box/config.json.bak-$(date +%s)"
+  BACKUP="/etc/sing-box/config.json.bak-$(date +%s)"
+  cp /etc/sing-box/config.json "$BACKUP"
+  warn "已备份旧 config.json 为 $BACKUP"
 fi
 
-###################################
-# 5. 写入 config.json
-###################################
 cat > /etc/sing-box/config.json <<EOF
 {
-  "log": { "level": "info" },
+  "log": {
+    "level": "info"
+  },
   "inbounds": [
     {
       "type": "vless",
       "tag": "vless-reality",
       "listen": "::",
       "listen_port": ${VPORT},
-      "users": [ { "uuid": "${UUID}" } ],
+      "users": [
+        {
+          "uuid": "${UUID}"
+        }
+      ],
       "tls": {
         "enabled": true,
         "server_name": "${REALITY_DOMAIN}",
@@ -153,24 +166,27 @@ cat > /etc/sing-box/config.json <<EOF
         "${UUID}": {
           "password": "${UUID}"
         }
-      }
+      },
+      "congestion_control": "bbr"
     }
   ],
   "outbounds": [
-    { "type": "direct" },
-    { "type": "dns" }
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
   ]
 }
 EOF
 
 ###################################
-# 6. 检查配置（带环境变量）
+# 6. 检查配置合法性（不再使用特殊 outbounds）
 ###################################
 log "检查配置合法性..."
-ENABLE_DEPRECATED_SPECIAL_OUTBOUNDS=true sing-box check -c /etc/sing-box/config.json
+sing-box check -c /etc/sing-box/config.json
 
 ###################################
-# 7. 写 systemd 服务
+# 7. 写 systemd 服务（不再设置 ENABLE_DEPRECATED_SPECIAL_OUTBOUNDS）
 ###################################
 cat > /etc/systemd/system/sing-box.service <<EOF
 [Unit]
@@ -179,7 +195,6 @@ After=network.target
 
 [Service]
 User=root
-Environment=ENABLE_DEPRECATED_SPECIAL_OUTBOUNDS=true
 ExecStart=/usr/local/bin/sing-box -c /etc/sing-box/config.json
 Restart=always
 RestartSec=3
@@ -193,21 +208,24 @@ systemctl restart sing-box
 systemctl enable sing-box
 
 ###################################
-# 8. 获取服务器 IP
+# 8. 获取服务器 IPv4
 ###################################
 IPV4=$(curl -s ipv4.ip.sb || curl -s ifconfig.me)
 
 ###################################
-# 9. 输出节点链接
+# 9. 生成分享链接
 ###################################
 VLESS_URL="vless://${UUID}@${IPV4}:${VPORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_DOMAIN}&fp=chrome&pbk=${PUB}&sid=${SID}&type=tcp#VLESS-REALITY"
 TUIC_URL="tuic://${UUID}:${UUID}@${IPV4}:${TPORT}?alpn=h3&congestion_control=bbr#TUIC"
 
-log "VLESS Reality:"
-echo "$VLESS_URL"
 echo
-log "TUIC:"
+log "================= VLESS Reality 链接 ================="
+echo "$VLESS_URL"
+echo "===================================================="
+echo
+log "===================== TUIC 链接 ====================="
 echo "$TUIC_URL"
+echo "===================================================="
 echo
 
 ###################################
@@ -218,4 +236,4 @@ qrencode -o /root/singbox-qrcode/vless.png "$VLESS_URL"
 qrencode -o /root/singbox-qrcode/tuic.png "$TUIC_URL"
 
 log "二维码已保存到 /root/singbox-qrcode/"
-log "全部完成！🎉"
+log "全部完成！🎉 现在可以在 NekoBox / Surge / sing-box 客户端里导入链接测试了。"
