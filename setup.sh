@@ -163,9 +163,33 @@ TUIC_PASSWORD=$(openssl rand -hex 16)
 SHORT_ID=$(openssl rand -hex 8)
 
 echo "👉 生成 Reality 密钥对 ..."
-REALITY_JSON=$(sing-box generate reality-keypair)
-REALITY_PRIVATE_KEY=$(echo "$REALITY_JSON" | jq -r '.private_key')
-REALITY_PUBLIC_KEY=$(echo "$REALITY_JSON" | jq -r '.public_key')
+
+# 调用 sing-box 生成密钥对（有的版本是 JSON，有的是纯文本）
+KEY_RAW=$(sing-box generate reality-keypair 2>/dev/null)
+
+# 兼容两种输出：
+# 1）JSON: {"private_key":"xxx","public_key":"yyy"}
+# 2）纯文本:
+#    PrivateKey: xxx
+#    PublicKey: yyy
+if echo "$KEY_RAW" | grep -q "{"; then
+  # JSON 格式
+  REALITY_PRIVATE_KEY=$(echo "$KEY_RAW" | jq -r '.private_key')
+  REALITY_PUBLIC_KEY=$(echo "$KEY_RAW" | jq -r '.public_key')
+else
+  # 纯文本格式
+  REALITY_PRIVATE_KEY=$(echo "$KEY_RAW" | sed -n 's/^PrivateKey:[[:space:]]*//p')
+  REALITY_PUBLIC_KEY=$(echo "$KEY_RAW" | sed -n 's/^PublicKey:[[:space:]]*//p')
+fi
+
+# 简单校验一下，防止为空
+if [ -z "$REALITY_PRIVATE_KEY" ] || [ -z "$REALITY_PUBLIC_KEY" ]; then
+  echo "❌ 生成 Reality 密钥对失败，请检查 sing-box 版本或手动执行：sing-box generate reality-keypair"
+  exit 1
+fi
+
+echo "✅ Reality 私钥: $REALITY_PRIVATE_KEY"
+echo "✅ Reality 公钥: $REALITY_PUBLIC_KEY"
 
 if [ -z "$REALITY_PRIVATE_KEY" ] || [ -z "$REALITY_PUBLIC_KEY" ]; then
   echo "❌ Reality 密钥对生成失败，请检查 sing-box 版本。"
