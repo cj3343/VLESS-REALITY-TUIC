@@ -16,6 +16,114 @@ need_cmd() {
   }
 }
 
+############## 清理旧配置 ##############
+
+clean_old_install() {
+  log "开始清理旧的 sing-box 配置和数据..."
+  
+  # 停止服务
+  if systemctl is-active --quiet sing-box 2>/dev/null; then
+    log "停止 sing-box 服务..."
+    systemctl stop sing-box
+  fi
+  
+  # 禁用服务
+  if systemctl is-enabled --quiet sing-box 2>/dev/null; then
+    log "禁用 sing-box 服务..."
+    systemctl disable sing-box
+  fi
+  
+  # 删除服务文件
+  if [ -f /etc/systemd/system/sing-box.service ]; then
+    log "删除 systemd 服务文件..."
+    rm -f /etc/systemd/system/sing-box.service
+    systemctl daemon-reload
+  fi
+  
+  # 备份并删除配置目录
+  if [ -d /etc/sing-box ]; then
+    local backup_name="/root/sing-box-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+    log "备份旧配置到: $backup_name"
+    tar -czf "$backup_name" /etc/sing-box/ 2>/dev/null || true
+    log "删除旧配置目录..."
+    rm -rf /etc/sing-box
+  fi
+  
+  # 清理临时文件
+  if [ -d /tmp/sb-reality ]; then
+    rm -rf /tmp/sb-reality
+  fi
+  rm -f /tmp/sing-box-config-*.json 2>/dev/null || true
+  rm -f /tmp/sb.tar.gz 2>/dev/null || true
+  
+  log "✅ 清理完成！旧配置已备份到 /root/"
+  echo
+}
+
+show_menu() {
+  echo "========================================"
+  echo "   Sing-box VPN 一键安装脚本"
+  echo "========================================"
+  echo "1. 全新安装（推荐）"
+  echo "2. 清理旧配置后重新安装"
+  echo "3. 仅清理配置（不安装）"
+  echo "4. 卸载 sing-box"
+  echo "5. 查看当前配置"
+  echo "0. 退出"
+  echo "========================================"
+  echo
+}
+
+uninstall_singbox() {
+  log "开始卸载 sing-box..."
+  
+  # 停止并禁用服务
+  systemctl stop sing-box 2>/dev/null || true
+  systemctl disable sing-box 2>/dev/null || true
+  
+  # 删除服务文件
+  rm -f /etc/systemd/system/sing-box.service
+  systemctl daemon-reload
+  
+  # 备份配置
+  if [ -d /etc/sing-box ]; then
+    local backup_name="/root/sing-box-final-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+    tar -czf "$backup_name" /etc/sing-box/ 2>/dev/null || true
+    log "配置已备份到: $backup_name"
+  fi
+  
+  # 删除文件
+  rm -rf /etc/sing-box
+  rm -f /usr/local/bin/sing-box
+  rm -rf /tmp/sb-reality
+  rm -f /tmp/sing-box-config-*.json 2>/dev/null || true
+  
+  log "✅ sing-box 已完全卸载！"
+  log "配置备份保存在 /root/ 目录下"
+}
+
+show_current_config() {
+  if [ ! -f /etc/sing-box/config.json ]; then
+    warn "未找到配置文件 /etc/sing-box/config.json"
+    return
+  fi
+  
+  echo "========================================"
+  echo "当前配置信息："
+  echo "========================================"
+  
+  if [ -f /etc/sing-box/share-links.txt ]; then
+    cat /etc/sing-box/share-links.txt
+  else
+    warn "未找到分享链接文件"
+  fi
+  
+  echo
+  echo "服务状态："
+  systemctl status sing-box --no-pager -l | head -n 10
+  echo "========================================"
+}
+
 ############## 安装基础依赖 ##############
 
 install_base() {
@@ -234,6 +342,7 @@ write_config() {
   "dns": {
     "servers": [
       {
+        "tag": "cloudflare",
         "address": "tls://1.1.1.1"
       }
     ]
@@ -476,7 +585,7 @@ setup_firewall() {
   fi
 }
 
-main() {
+do_install() {
   need_cmd curl
   need_cmd wget
   need_cmd jq
@@ -522,6 +631,50 @@ main() {
   echo "3）Mac/Win sing-box / v2rayN：新建节点粘贴链接"
   echo "4）二维码已在上方显示，也可在 /etc/sing-box/ 下载 PNG"
   echo "=========================================="
+}
+
+main() {
+  # 显示菜单
+  while true; do
+    show_menu
+    read -rp "请选择操作 [0-5]: " choice
+    
+    case "$choice" in
+      1)
+        log "开始全新安装..."
+        do_install
+        break
+        ;;
+      2)
+        clean_old_install
+        log "开始重新安装..."
+        do_install
+        break
+        ;;
+      3)
+        clean_old_install
+        log "清理完成！"
+        break
+        ;;
+      4)
+        uninstall_singbox
+        break
+        ;;
+      5)
+        show_current_config
+        echo
+        read -rp "按回车键继续..."
+        ;;
+      0)
+        log "退出脚本"
+        exit 0
+        ;;
+      *)
+        err "无效选择，请重新输入"
+        echo
+        ;;
+    esac
+  done
 }
 
 main "$@"
