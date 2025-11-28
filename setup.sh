@@ -307,6 +307,10 @@ write_config() {
       {
         "protocol": ["bittorrent"],
         "outbound": "block"
+      },
+      {
+        "geoip": ["cn"],
+        "outbound": "block"
       }
     ],
     "final": "direct"
@@ -430,17 +434,51 @@ EOF
 
   if command -v qrencode >/dev/null 2>&1; then
     echo
-    log "生成二维码 PNG（保存在 /etc/sing-box/）..."
+    log "生成二维码（终端显示）..."
+    echo
+    echo "【VLESS-REALITY 二维码】"
+    echo "$VLESS_URL" | qrencode -t ANSIUTF8
+    echo
+    echo "【TUIC-REALITY 二维码】"
+    echo "$TUIC_URL" | qrencode -t ANSIUTF8
+    echo
+    log "也可生成 PNG 文件："
     echo "$VLESS_URL" | qrencode -o /etc/sing-box/vless.png
     echo "$TUIC_URL"  | qrencode -o /etc/sing-box/tuic.png
-    log "二维码文件：/etc/sing-box/vless.png, /etc/sing-box/tuic.png"
-    log "可用 FinalShell / SFTP 下载到本地，用手机扫码导入。"
+    log "PNG 文件保存在：/etc/sing-box/vless.png, /etc/sing-box/tuic.png"
   else
     warn "未安装 qrencode，已跳过二维码生成。"
   fi
 }
 
 ############## 主流程 ##############
+
+setup_firewall() {
+  log "配置防火墙规则..."
+  
+  if command -v ufw >/dev/null 2>&1; then
+    # 允许 SSH（当前连接的端口）
+    ufw allow 22/tcp 2>/dev/null || true
+    
+    # 允许 VPN 端口
+    ufw allow "$1"/tcp  # VLESS
+    ufw allow "$2"/udp  # TUIC
+    
+    # 启用防火墙（如果未启用）
+    echo "y" | ufw enable 2>/dev/null || true
+    ufw status
+    
+    log "✅ 防火墙已配置"
+  elif command -v firewall-cmd >/dev/null 2>&1; then
+    # CentOS/RHEL 使用 firewalld
+    firewall-cmd --permanent --add-port="$1"/tcp
+    firewall-cmd --permanent --add-port="$2"/udp
+    firewall-cmd --reload
+    log "✅ 防火墙已配置"
+  else
+    warn "未检测到 ufw 或 firewalld，请手动配置防火墙开放端口 $1(TCP) 和 $2(UDP)"
+  fi
+}
 
 main() {
   need_cmd curl
@@ -466,15 +504,28 @@ main() {
   TUIC_PASS=$(generate_uuid)
 
   write_config "$VLESS_PORT" "$TUIC_PORT" "$VLESS_UUID" "$TUIC_UUID" "$TUIC_PASS"
+  setup_firewall "$VLESS_PORT" "$TUIC_PORT"
   setup_systemd
   gen_share_links "$VLESS_PORT" "$TUIC_PORT" "$VLESS_UUID" "$TUIC_UUID" "$TUIC_PASS"
 
   echo
   log "🎉 全部完成！"
-  echo "提示："
-  echo "1）安卓 NekoBox / v2rayNG：直接导入 vless:// 或 tuic:// 链接即可；"
-  echo "2）Mac Surge / sing-box / Nekoray：新建节点 → 粘贴链接导入；"
-  echo "3）二维码 PNG 在 /etc/sing-box/ 下，可扫码快速导入。"
+  echo
+  echo "============== 🔐 安全建议 =============="
+  echo "1. 定期更新系统：apt update && apt upgrade"
+  echo "2. 修改 SSH 端口并禁用密码登录（只用密钥）"
+  echo "3. 定期检查流量使用：可用 vnstat 监控"
+  echo "4. 不要分享链接给不信任的人"
+  echo "5. 定期更改 UUID：重新运行本脚本即可"
+  echo "6. 监控服务状态：systemctl status sing-box"
+  echo "========================================"
+  echo
+  echo "============== 📱 客户端导入 =============="
+  echo "1）安卓 NekoBox / v2rayNG：扫码或粘贴链接"
+  echo "2）iOS Shadowrocket：扫码导入"
+  echo "3）Mac/Win sing-box / v2rayN：新建节点粘贴链接"
+  echo "4）二维码已在上方显示，也可在 /etc/sing-box/ 下载 PNG"
+  echo "=========================================="
 }
 
 main "$@"
