@@ -69,9 +69,132 @@ show_menu() {
   echo "3. 仅清理配置（不安装）"
   echo "4. 卸载 sing-box"
   echo "5. 查看当前配置"
+  echo "6. 诊断连接问题"
   echo "0. 退出"
   echo "========================================"
   echo
+}
+
+diagnose_connection() {
+  echo "========================================"
+  echo "🔍 开始诊断连接问题"
+  echo "========================================"
+  echo
+  
+  # 1. 检查服务状态
+  log "1. 检查 sing-box 服务状态..."
+  if systemctl is-active --quiet sing-box; then
+    echo "✅ 服务正在运行"
+  else
+    err "❌ 服务未运行！"
+    echo "尝试启动服务："
+    systemctl start sing-box
+    sleep 2
+    systemctl status sing-box --no-pager -l | head -n 15
+  fi
+  echo
+  
+  # 2. 检查端口监听
+  log "2. 检查端口监听状态..."
+  if command -v ss >/dev/null 2>&1; then
+    ss -tulnp | grep sing-box || warn "未找到 sing-box 监听端口"
+  else
+    netstat -tulnp | grep sing-box || warn "未找到 sing-box 监听端口"
+  fi
+  echo
+  
+  # 3. 检查配置文件
+  log "3. 检查配置文件..."
+  if [ -f /etc/sing-box/config.json ]; then
+    echo "✅ 配置文件存在"
+    if sing-box check -c /etc/sing-box/config.json 2>&1 | grep -q "configuration valid"; then
+      echo "✅ 配置文件语法正确"
+    else
+      err "❌ 配置文件有问题！"
+      sing-box check -c /etc/sing-box/config.json
+    fi
+  else
+    err "❌ 配置文件不存在！"
+  fi
+  echo
+  
+  # 4. 检查防火墙
+  log "4. 检查防火墙状态..."
+  if command -v ufw >/dev/null 2>&1; then
+    if ufw status | grep -q "Status: active"; then
+      echo "防火墙已启用，检查端口规则："
+      ufw status | grep -E "443|8443"
+      if ! ufw status | grep -q "443"; then
+        warn "⚠️  443 端口未开放！运行以下命令开放："
+        echo "  ufw allow 443/tcp"
+      fi
+      if ! ufw status | grep -q "8443"; then
+        warn "⚠️  8443 端口未开放！运行以下命令开放："
+        echo "  ufw allow 8443/udp"
+      fi
+    else
+      echo "防火墙未启用"
+    fi
+  elif command -v firewall-cmd >/dev/null 2>&1; then
+    firewall-cmd --list-ports
+  else
+    echo "未检测到防火墙"
+  fi
+  echo
+  
+  # 5. 检查日志错误
+  log "5. 查看最近的错误日志..."
+  journalctl -u sing-box -n 20 --no-pager | grep -i "error\|fatal\|fail" || echo "未发现明显错误"
+  echo
+  
+  # 6. 测试域名连通性
+  log "6. 测试 Reality 伪装域名连通性..."
+  if [ -f /etc/sing-box/config.json ]; then
+    local domain=$(grep -o '"server_name": *"[^"]*"' /etc/sing-box/config.json | head -n1 | cut -d'"' -f4)
+    if [ -n "$domain" ]; then
+      echo "测试域名: $domain"
+      if timeout 3 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null 2>&1 | grep -q "Verify return code: 0"; then
+        echo "✅ 域名 $domain 可正常访问"
+      else
+        warn "⚠️  域名 $domain 连接有问题"
+      fi
+    fi
+  fi
+  echo
+  
+  # 7. 提供建议
+  echo "========================================"
+  log "💡 常见问题解决方案："
+  echo "========================================"
+  echo
+  echo "问题1：连接被重置"
+  echo "  → 检查客户端配置是否正确（IP、端口、UUID）"
+  echo "  → 检查服务器防火墙是否开放端口"
+  echo "  → 检查 VPS 提供商的安全组/防火墙规则"
+  echo
+  echo "问题2：无法连接"
+  echo "  → ping 服务器 IP 是否通"
+  echo "  → 检查端口是否被 VPS 提供商封禁"
+  echo "  → 尝试更换端口（避免使用 80、443、8080 等常见端口）"
+  echo
+  echo "问题3：可以 ping 通但连不上"
+  echo "  → ICMP 和 TCP/UDP 是不同的协议"
+  echo "  → 用 telnet 或 nc 测试具体端口"
+  echo "  → 检查 Reality 域名是否被墙"
+  echo
+  echo "问题4：配置正确但还是连不上"
+  echo "  → 重启 sing-box 服务：systemctl restart sing-box"
+  echo "  → 查看实时日志：journalctl -u sing-box -f"
+  echo "  → 尝试更换 Reality 伪装域名"
+  echo
+  echo "========================================"
+  echo
+  read -rp "是否查看实时日志？(y/n): " view_logs
+  if [[ "$view_logs" =~ ^[Yy]$ ]]; then
+    log "显示实时日志（按 Ctrl+C 退出）..."
+    sleep 1
+    journalctl -u sing-box -f
+  fi
 }
 
 uninstall_singbox() {
@@ -665,12 +788,17 @@ main() {
         echo
         read -rp "按回车键继续..."
         ;;
+      6)
+        diagnose_connection
+        echo
+        read -rp "按回车键继续..."
+        ;;
       0)
         log "退出脚本"
         exit 0
         ;;
       *)
-        err "无效选择，请重新输入"
+        err "无效选择，请重新输入 [0-6]"
         echo
         ;;
     esac
